@@ -6,6 +6,9 @@ import sys
 import numpy as np
 import pandas as pd
 
+from ..utils.preprocess import betas2m
+
+
 class MethylData:
     """Convenience class to handle methylation data fo ML.
 
@@ -154,6 +157,8 @@ class MethylData:
         # Remove rows with NaN in class_label.
         nan_idx = pd.isnull(sample_sheet[class_label])
         sample_sheet_processed = sample_sheet.loc[~ nan_idx, :]
+        # Select betas present in the processed sample_sheet, and put them
+        # in the same order.
         betas_processed = betas.loc[sample_sheet_processed['Sample_Name'],
                                     :]
         # Convert to m_values.

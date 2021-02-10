@@ -20,4 +20,7 @@ setuptools.setup(
         "Operating System :: POSIX :: Linux",
     ],
     python_requires='>=3.8',
+    # If any package contains *.r files, include them:
+    package_data={'': ['*.r', '*.R']},
+    include_package_data=True
 )

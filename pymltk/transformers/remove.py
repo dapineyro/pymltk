@@ -8,6 +8,11 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 from sklearn.utils import check_X_y, check_array
 from scipy.stats import spearmanr, f_oneway
+import rpy2.robjects as ro
+from rpy2.robjects.packages import importr
+from rpy2.robjects import pandas2ri
+from rpy2.robjects import numpy2ri
+from rpy2.robjects.conversion import localconverter
 
 class RemoveFeaturesByNaN(TransformerMixin, BaseEstimator):
     """Remove features based on proporion of NaN values.
@@ -32,7 +37,7 @@ class RemoveFeaturesByNaN(TransformerMixin, BaseEstimator):
     n_features_transformed_ : int
         The number of features of the transformed data.
     features_to_keep_ : 1D array of bool.
-        An array (np.Series) of bool with len == n_features_original_ where
+        An array (np.array) of bool with len == n_features_original_ where
         True means a conserved feature in the transformed data.
     """
     def __init__(self, max_nan_prop = 0.1, verbose = False):
@@ -102,7 +107,7 @@ class RemoveFeaturesByNaN(TransformerMixin, BaseEstimator):
         # Check that the input is of the same shape as the one passed
         # during fit.
         if X.shape[1] != self.n_features_original_:
-            raise ValueError('Shape of input is different from what was seen'
+            raise ValueError('Shape of input is different from what was seen' +
                              'in `fit`')
 
         if self.verbose:
@@ -153,7 +158,7 @@ class RemoveCorrelatedFeatures(TransformerMixin, BaseEstimator):
     n_features_transformed_ : int
         The number of features of the transformed data.
     features_to_keep_ : 1D array of bool
-        An array (np.Series) of bool with len == n_features_original_ where
+        An array (np.array) of bool with len == n_features_original_ where
         True means a conserved feature in the transformed data.
     """
     def __init__(self, select_by = 'anova', cor_thr = 0.9,
@@ -264,7 +269,7 @@ class RemoveCorrelatedFeatures(TransformerMixin, BaseEstimator):
         f_pvalues = []
         for i in range(X.shape[1]):
             x_i = X[:,i]
-            x_groups = np.array([x_i[y == t] for t in targets])
+            x_groups = np.array([x_i[y == t] for t in targets], dtype = object)
             r = f_oneway(*x_groups)
             f_pvalues.append(r[1])
         return np.array(f_pvalues)
@@ -291,7 +296,7 @@ class RemoveCorrelatedFeatures(TransformerMixin, BaseEstimator):
         # Check that the input is of the same shape as the one passed
         # during fit.
         if X.shape[1] != self.n_features_original_:
-            raise ValueError('Shape of input is different from what was seen'
+            raise ValueError('Shape of input is different from what was seen' +
                              'in `fit`')
 
         if self.verbose:
@@ -307,3 +312,176 @@ class RemoveCorrelatedFeatures(TransformerMixin, BaseEstimator):
                       f'{np.sum(~ self.features_to_keep_)}')
             return X[:, self.features_to_keep_]
 
+class LimmaFS(TransformerMixin, BaseEstimator):
+    """Select features based on limma.
+
+    This transformer statistically test each class against the rest
+    and selects the best features for each contrast up to a specified
+    limit. To statistically assess the contrasts it uses the R
+    implementation of the limma (linear models for microarrays) package.
+    If there are more than two classes to predict, each contrast will
+    be implemented as one vs the rest.
+    Note that to use this function, R and limma package should be
+    available in the system. It can be used only for classification. It
+    will not accept input data (X) with NaN values (those must be imputed
+    or removed before).
+
+    Parameters
+    ----------
+    k : int
+        The maximum number of features to be selected. Those will be
+        evenly selected from the top statistically significant in each
+        contrast.
+    remove_dup : bool, default=True
+        Whether to remove duplicate features from the selection. This
+        will be only relevant for more than 2 classes datasets. In these
+        cases, a round(k/n_classes, 0) features will be selected per each
+        of the one vs the rest contasts. It is possible to select the
+        same feature in more than one contrast, so `remove_dup` = True
+        avoids this behaviour.
+    to_m_vals : bool, default=False
+        This selection method was originally designed to be used with
+        methylation data. This data comes usually in the form of a
+        data matrix of beta-values. Those beta-values are not well
+        suited for statistical assessment with limma. Then, a data
+        transformation to m-values (log2(betas/(1-betas))) is usually
+        performed. This parameter, when is set to False (default) do not
+        perform this transformation. Set to True when using only beta values.
+        Take into account that when True, data must not contain 0 or 1
+        values.
+    verbose: bool, default = False
+        Controls the verbosity level. Default = no MSG.
+    Attributes
+    ----------
+    n_features_original_ : int
+        The number of features of the data passed to :meth:`fit`.
+    n_features_transformed_ : int
+        The number of features of the transformed data.
+    features_to_keep_ : 1D array of bool
+        An array (np.array) of bool with len == n_features_original_ where
+        True means a conserved feature in the transformed data.
+    """
+    def __init__(self, k = None, remove_dup = True, to_m_vals = False,
+                 verbose = False):
+        self.k = k
+        self.remove_dup = remove_dup
+        self.to_m_vals = to_m_vals
+        self.verbose = verbose
+
+    def fit(self, X, y):
+        """A reference implementation of a fitting function for a transformer.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix}, shape (n_samples, n_features)
+            The training input samples. No NaN values are allowed.
+        y : 1D array, shape (n_samples, )
+            The target variable.
+        Returns
+        -------
+        self : object
+            Returns self.
+        """
+        X, y = check_X_y(X, y, accept_sparse=True, force_all_finite = False)
+
+        self.n_features_original_ = X.shape[1]
+
+        if self.verbose:
+            print(f'[MSG] Fitting to select {self.k} features using limma')
+
+        # Check for NAs and raise an error when found.
+        if np.any(np.isnan(X)):
+            raise ValueError('X (input data set) contains NaN values, ' +
+                             'please, remove or impute them before.')
+
+        y_pandas = pd.Series(y)
+        # numpy arrays do not have rownames and we need them for the R
+        # funtion. Just create dummy ones.
+        sample_names = pd.Series(np.arange(0, X.shape[0])).astype(str)
+        # Load some useful R functions.
+        factor_R = ro.r['factor']
+        source_R = ro.r['source']
+
+        with localconverter(ro.default_converter + pandas2ri.converter):
+            targets_r = ro.conversion.py2rpy(y_pandas)
+        targets_r = factor_R(targets_r)
+
+        with localconverter(ro.default_converter + pandas2ri.converter):
+            sample_names_r = ro.conversion.py2rpy(sample_names)
+
+        #b_vals_2_r_np = b_vals_2_r.values
+        numpy2ri.activate()
+        ro.globalenv['X_r'] = X
+        numpy2ri.deactivate()
+
+        X_r = ro.r['X_r']
+
+        source_R('../Rcode/limma_fs.R')
+        limma_fs = ro.globalenv['limma_fs']
+
+        ro.globalenv['are_m_vals_r'] = not self.to_m_vals
+        are_m_vals_r = ro.r['are_m_vals_r']
+
+        ro.globalenv['remove_dup_r'] = self.remove_dup
+        remove_dup_r = ro.r['remove_dup_r']
+
+        ro.globalenv['k_r'] = self.k
+        k_r = ro.r['k_r']
+
+        sel_r = limma_fs(X_r, sample_names_r, targets_r, k_r, remove_dup_r,
+                         are_m_vals_r)
+        sel_idx= pd.Series(sel_r).values.astype(int)
+        # Remember to subtract 1 as python numbering starts at 0 and at 1 in R.
+        sel_idx -= 1
+        # Create a bool mask.
+        sel_mask = np.array([True if i in sel_idx else False for i in range(0, X.shape[1])])
+
+        self.features_to_keep_ = sel_mask
+        self.n_features_transformed_ = np.sum(sel_mask)
+
+        if self.verbose:
+            if self.n_features_transformed_ == self.n_features_original_:
+                print('[MSG] All original features were selected.')
+            else:
+                print('[MSG] Number of features to be removed: ' +
+                      f'{np.sum(~ features_to_keep)}')
+
+        # Return the transformer.
+        return self
+
+    def transform(self, X):
+        """ A reference implementation of a transform function.
+
+        Parameters
+        ----------
+        X : {array-like, sparse-matrix}, shape (n_samples, n_features)
+            The input samples.
+        Returns
+        -------
+        X_transformed : array, shape (n_samples, n_features)
+            The array containing the element-wise square roots of the values
+            in ``X``.
+        """
+        # Check is fit had been called
+        check_is_fitted(self, 'n_features_original_')
+
+        # Input validation
+        X = check_array(X, accept_sparse=True, force_all_finite = False)
+
+        # Check that the input is of the same shape as the one passed
+        # during fit.
+        if X.shape[1] != self.n_features_original_:
+            raise ValueError('Shape of input is different from what was seen' +
+                             'in `fit`')
+
+        if self.verbose:
+            print('[MSG] Selecting features by LimmaFS')
+        if self.n_features_transformed_ == self.n_features_original_:
+            if self.verbose:
+                print('[MSG] All original features were selected.')
+            return X
+        else:
+            if self.verbose:
+                print('[MSG] Number of features to be removed: ' +
+                      f'{np.sum(~ self.features_to_keep)}')
+            return X[:, self.features_to_keep_]

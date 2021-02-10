@@ -11,4 +11,4 @@ to other fields.
 It is largely based on scikit-learn, pandas and numpy.
 """
 
-__all__ = ['handlers', 'transformers', 'utils']
+__all__ = ['handlers', 'transformers', 'utils', 'Rcode']
