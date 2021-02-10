@@ -361,7 +361,7 @@ class LimmaFS(TransformerMixin, BaseEstimator):
         An array (np.array) of bool with len == n_features_original_ where
         True means a conserved feature in the transformed data.
     """
-    def __init__(self, k = None, remove_dup = True, to_m_vals = False,
+    def __init__(self, k, remove_dup = True, to_m_vals = False,
                  verbose = False):
         self.k = k
         self.remove_dup = remove_dup
