@@ -6,8 +6,10 @@ pymltk.egg-info/PKG-INFO
 pymltk.egg-info/SOURCES.txt
 pymltk.egg-info/dependency_links.txt
 pymltk.egg-info/top_level.txt
+pymltk/Rcode/limma_fs.R
 pymltk/handlers/__init__.py
 pymltk/handlers/methyl.py
+pymltk/handlers/spot_check.py
 pymltk/transformers/__init__.py
 pymltk/transformers/remove.py
 pymltk/utils/__init__.py

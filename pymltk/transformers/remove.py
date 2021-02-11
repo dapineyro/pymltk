@@ -2,6 +2,7 @@
 Collection of transformers used to remove features.
 """
 
+import os
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -80,7 +81,7 @@ class RemoveFeaturesByNaN(TransformerMixin, BaseEstimator):
                       f'samples over {self.max_nan_prop}')
             else:
                 print('[MSG] Number of failed features to be removed: ' +
-                      f'{np.sum(~ not_failed_features)}')
+                      f'{np.sum(~ self.features_to_keep_)}')
 
         # Return the transformer.
         return self
@@ -269,7 +270,7 @@ class RemoveCorrelatedFeatures(TransformerMixin, BaseEstimator):
                 print('[MSG] No correlated features found.')
             else:
                 print('[MSG] Number of correlated features to be removed: ' +
-                      f'{np.sum(~ features_to_keep)}')
+                      f'{np.sum(~ self.features_to_keep_)}')
 
         # Return the transformer.
         return self
@@ -462,7 +463,11 @@ class LimmaFS(TransformerMixin, BaseEstimator):
 
         X_r = ro.r['X_r']
 
-        source_R('../Rcode/limma_fs.R')
+        r_code_source = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                                     os.path.join('Rcode', 'limma_fs.R')
+                                    )
+
+        source_R(r_code_source)
         limma_fs = ro.globalenv['limma_fs']
 
         ro.globalenv['are_m_vals_r'] = not self.to_m_vals
@@ -490,7 +495,7 @@ class LimmaFS(TransformerMixin, BaseEstimator):
                 print('[MSG] All original features were selected.')
             else:
                 print('[MSG] Number of features to be removed: ' +
-                      f'{np.sum(~ features_to_keep)}')
+                      f'{np.sum(~ self.features_to_keep_)}')
 
         # Return the transformer.
         return self
@@ -529,7 +534,7 @@ class LimmaFS(TransformerMixin, BaseEstimator):
         else:
             if self.verbose:
                 print('[MSG] Number of features to be removed: ' +
-                      f'{np.sum(~ self.features_to_keep)}')
+                      f'{np.sum(~ self.features_to_keep_)}')
             return X[:, self.features_to_keep_]
 
     def get_support(self, indices=False):
@@ -554,3 +559,199 @@ class LimmaFS(TransformerMixin, BaseEstimator):
         check_is_fitted(self, 'n_features_original_')
         mask = self.features_to_keep_
         return mask if not indices else np.where(mask)[0]
+
+class VotingFS(TransformerMixin, BaseEstimator):
+    """Select features based on voting from multiple feature selections.
+
+    This transformer performs as many feature selections as given and
+    then compare the selected features to find the optimal feature
+    combination based on voting the results of the multiple feature
+    selections.
+
+    Parameters
+    ----------
+    selectors : list of touples
+        The feature selection methods to test. This list has to be
+        created by tuples of ('FS_name', fs.object). All FS objects have
+        to have a get_support() method, returning a bool mask to select
+        features. As exception, if 'FS_name' is 'boruta', the attribute
+        support_ will be used instead of a call for get_support(), as
+        this method is not fully compatible with sklearn interface. The
+        selection objects should be already initialized.
+    k : int
+        The maximum number of features to be selected.
+    v : int, default = 1
+        The minimum number of votes that a feature must have in order to
+        be selected. The default (1) will select all the features selected
+        by at least one selector.
+    verbose: bool, default = False
+        Controls the verbosity level. Default = no MSG.
+    Attributes
+    ----------
+    votes_ : 2D array, shape (len(selectors), n_features_original_)
+        A numpy array of bools in which each row corresponds to each
+        selector method tested, and each column corresponds to each feature.
+        It contains the selected (True) and non-selected (False) features
+        in each method.
+    n_features_original_ : int
+        The number of features of the data passed to :meth:`fit`.
+    n_features_transformed_ : int
+        The number of features of the transformed data.
+    features_to_keep_ : 1D array of bool
+        An array (np.array) of bool with len == n_features_original_ where
+        True means a conserved feature in the transformed data.
+    """
+    def __init__(self, selectors, k, v = 1, verbose = False):
+        self.selectors = selectors
+        self.k = k
+        self.v = v
+        self.verbose = verbose
+
+    def fit(self, X, y):
+        """A reference implementation of a fitting function for a transformer.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix}, shape (n_samples, n_features)
+            The training input samples. No NaN values are allowed.
+        y : 1D array, shape (n_samples, )
+            The target variable.
+        Returns
+        -------
+        self : object
+            Returns self.
+        """
+        X, y = check_X_y(X, y, accept_sparse=True, force_all_finite = False)
+        self.n_features_original_ = X.shape[1]
+        assert self.k <= self.n_features_original_, ('[ERROR] The k of VotingFS ' +
+                                                'must be smaller than the ' +
+                                                'total number of features')
+        if self.verbose:
+            print(f'[MSG] Fitting to select {self.k} features selected ' +
+                  f'at least by {self.v} selectors of the provided ' +
+                  f'{len(self.selectors)} selector/s list')
+        if self._check_selectors(self.selectors):
+            support_list = []
+            for s_name, s_s in self.selectors:
+                if self.verbose:
+                    print(f'[MSG] Evaluating {s_name}')
+                s_fit = s_s.fit(X, y)
+                if s_name.upper() == 'BORUTA':
+                    s_support = s_fit.support_
+                else:
+                    s_support = s_fit.get_support()
+                if self.verbose:
+                    print(f'[MSG] {s_name} selected {s_support.sum()} features')
+                support_list.append(s_support)
+            s_array = np.array(support_list)
+            votes = s_array.sum(axis = 0)
+            votes_v = votes >= self.v
+            if votes_v.sum() <= self.k:
+                sel_mask = votes_v
+            else:
+                sel_mask = np.full(votes.shape[0], False)
+                sel_mask[votes.argsort()[-self.k:]] = True
+        else:
+            raise ValueError('Your selectors parameter is malformed. Please' +
+                             'use a list (len >= 2) of tuples (\'name\', ' +
+                             'selector)')
+        self.votes_ = s_array
+        self.features_to_keep_ = sel_mask
+        self.n_features_transformed_ = np.sum(sel_mask)
+
+        if self.verbose:
+            if self.n_features_transformed_ == self.n_features_original_:
+                print('[MSG] All original features were selected.')
+            else:
+                print('[MSG] Number of features to be removed: ' +
+                      f'{np.sum(~ self.features_to_keep_)}')
+
+        # Return the transformer.
+        return self
+
+    def _check_selectors(self, s):
+        """Check the correctness of the selectors parameter.
+
+        The parameter `selectors` should be formed by a list of tuples,
+        each of them formed by a `string` and the selector object, already
+        initialized.
+
+        Parameters
+        ----------
+        s : list of tuples
+            The list of tuples to check.
+
+        Returns
+        -------
+        correct : bool
+            A bool indicating that the check was successful, or not.
+        """
+        if (isinstance(s, list) and
+            len(s) > 1 and
+            all([len(x) == 2 for x in s]) and
+            all([True if isinstance(x, tuple) else False for x in s]) and
+            all([True if isinstance(x[0], str) else False for x in s])):
+            return True
+        else:
+            return False
+
+    def transform(self, X):
+        """ A reference implementation of a transform function.
+
+        Parameters
+        ----------
+        X : {array-like, sparse-matrix}, shape (n_samples, n_features)
+            The input samples.
+        Returns
+        -------
+        X_transformed : array, shape (n_samples, n_features)
+            The array containing the element-wise square roots of the values
+            in ``X``.
+        """
+        # Check is fit had been called
+        check_is_fitted(self, 'n_features_original_')
+
+        # Input validation
+        X = check_array(X, accept_sparse=True, force_all_finite = False)
+
+        # Check that the input is of the same shape as the one passed
+        # during fit.
+        if X.shape[1] != self.n_features_original_:
+            raise ValueError('Shape of input is different from what was seen' +
+                             'in `fit`')
+
+        if self.verbose:
+            print('[MSG] Selecting features by VotingFS')
+        if self.n_features_transformed_ == self.n_features_original_:
+            if self.verbose:
+                print('[MSG] All original features were selected.')
+            return X
+        else:
+            if self.verbose:
+                print('[MSG] Number of features to be removed: ' +
+                      f'{np.sum(~ self.features_to_keep_)}')
+            return X[:, self.features_to_keep_]
+
+    def get_support(self, indices=False):
+        """
+        Get a mask, or integer index, of the features selected
+        Parameters
+        ----------
+        indices : bool, default=False
+            If True, the return value will be an array of integers, rather
+            than a boolean mask.
+        Returns
+        -------
+        support : array
+            An index that selects the retained features from a feature vector.
+            If `indices` is False, this is a boolean array of shape
+            [# input features], in which an element is True if its
+            corresponding feature is selected for retention. If `indices` is
+            True, this is an integer array of shape [# output features] whose
+            values are indices into the input feature vector.
+        """
+        # Check is fit had been called
+        check_is_fitted(self, 'n_features_original_')
+        mask = self.features_to_keep_
+        return mask if not indices else np.where(mask)[0]
+
