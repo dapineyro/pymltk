@@ -124,6 +124,29 @@ class RemoveFeaturesByNaN(TransformerMixin, BaseEstimator):
                       f'{np.sum(~ self.features_to_keep_)}')
             return X[:, self.features_to_keep_]
 
+    def get_support(self, indices=False):
+        """
+        Get a mask, or integer index, of the features selected
+        Parameters
+        ----------
+        indices : bool, default=False
+            If True, the return value will be an array of integers, rather
+            than a boolean mask.
+        Returns
+        -------
+        support : array
+            An index that selects the retained features from a feature vector.
+            If `indices` is False, this is a boolean array of shape
+            [# input features], in which an element is True if its
+            corresponding feature is selected for retention. If `indices` is
+            True, this is an integer array of shape [# output features] whose
+            values are indices into the input feature vector.
+        """
+        # Check is fit had been called
+        check_is_fitted(self, 'n_features_original_')
+        mask = self.features_to_keep_
+        return mask if not indices else np.where(mask)[0]
+
 class RemoveCorrelatedFeatures(TransformerMixin, BaseEstimator):
     """Remove features based on their correlation.
 
@@ -312,6 +335,29 @@ class RemoveCorrelatedFeatures(TransformerMixin, BaseEstimator):
                       f'{np.sum(~ self.features_to_keep_)}')
             return X[:, self.features_to_keep_]
 
+    def get_support(self, indices=False):
+        """
+        Get a mask, or integer index, of the features selected
+        Parameters
+        ----------
+        indices : bool, default=False
+            If True, the return value will be an array of integers, rather
+            than a boolean mask.
+        Returns
+        -------
+        support : array
+            An index that selects the retained features from a feature vector.
+            If `indices` is False, this is a boolean array of shape
+            [# input features], in which an element is True if its
+            corresponding feature is selected for retention. If `indices` is
+            True, this is an integer array of shape [# output features] whose
+            values are indices into the input feature vector.
+        """
+        # Check is fit had been called
+        check_is_fitted(self, 'n_features_original_')
+        mask = self.features_to_keep_
+        return mask if not indices else np.where(mask)[0]
+
 class LimmaFS(TransformerMixin, BaseEstimator):
     """Select features based on limma.
 
@@ -485,3 +531,26 @@ class LimmaFS(TransformerMixin, BaseEstimator):
                 print('[MSG] Number of features to be removed: ' +
                       f'{np.sum(~ self.features_to_keep)}')
             return X[:, self.features_to_keep_]
+
+    def get_support(self, indices=False):
+        """
+        Get a mask, or integer index, of the features selected
+        Parameters
+        ----------
+        indices : bool, default=False
+            If True, the return value will be an array of integers, rather
+            than a boolean mask.
+        Returns
+        -------
+        support : array
+            An index that selects the retained features from a feature vector.
+            If `indices` is False, this is a boolean array of shape
+            [# input features], in which an element is True if its
+            corresponding feature is selected for retention. If `indices` is
+            True, this is an integer array of shape [# output features] whose
+            values are indices into the input feature vector.
+        """
+        # Check is fit had been called
+        check_is_fitted(self, 'n_features_original_')
+        mask = self.features_to_keep_
+        return mask if not indices else np.where(mask)[0]
