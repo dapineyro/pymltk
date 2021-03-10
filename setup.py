@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="pymltk",
-    version="0.0.4",
+    version="0.0.5",
     author="David Piñeyro",
     author_email="dapineyro.dev@gmail.com",
     license="GPL-3",

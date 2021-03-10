@@ -1,19 +1,22 @@
 """
 Collection of useful utilities to preprocess data.
 """
-
+import warnings
+import numbers
+import time
+from traceback import format_exc
 import sys
 import numpy as np
 import pandas as pd
 import sklearn.model_selection as model_sel
+from joblib import Parallel, logger, delayed
 
-from joblib import Parallel, delayed
 from sklearn.base import is_classifier, clone
 from sklearn.utils import indexable
+from sklearn.utils.metaestimators import _safe_split
+from sklearn.utils.validation import check_is_fitted
+from sklearn.utils.validation import _check_fit_params
 from sklearn.model_selection._split import check_cv
-from sklearn.metrics import check_scoring
-from sklearn.metrics._scorer import _check_multimetric_scoring, _MultimetricScorer
-from sklearn.model_selection._validation import _fit_and_score, _aggregate_score_dicts
 
 def betas2m(betas):
     """
@@ -267,8 +270,10 @@ def train_test_split_david(X, Y, stratify, test_size = 0.3, n_splits = 1,
             splits_found.append(new_split)
         return splits_found
 
-def hard_sample_detector(estimator, X, Y, cv=None, n_jobs=None,
-                         fit_params=None):
+def hard_sample_detector(estimator, X, y, groups=None, cv=None, n_jobs=None,
+                         verbose=0, fit_params=None, pre_dispatch='2*n_jobs',
+                         return_train_pred=False, return_estimator=False,
+                         error_fit=np.nan):
     """Evaluate sample predictability using cross-validation.
 
     In many real world problems, the available samples are not always usable
@@ -282,7 +287,17 @@ def hard_sample_detector(estimator, X, Y, cv=None, n_jobs=None,
     and reporting the failure ratio of each. Samples with very high failure
     ratio could be considered to be discarded.
 
-    Note: this function is only usable for supervised learning.
+    Note: this function is only usable for supervised classification problems.
+
+    Note 2: while this could be implemented as a transformer to be included
+    in Pipeline, I didn't it for two main reasons: a) adding a many-folded
+    CV procedure to a Pipeline could be very computational intensive; b) the
+    inclusion in a pipeline needs some mechanism of automatic removal of the
+    hard samples, this could be a source of potential problems. I made this
+    function to provide means to investigate wierd samples, but automatically
+    removing them is a bit drastic.
+
+    Note 3: based on sklearn.model_selection._validation cross_validate.
 
     Parameters
     ----------
@@ -290,9 +305,13 @@ def hard_sample_detector(estimator, X, Y, cv=None, n_jobs=None,
         The object to use to fit the data.
     X : array-like of shape (n_samples, n_features)
         The data to fit. Can be for example a list, or an array.
-    Y : array-like of shape (n_samples,) or (n_samples, n_outputs)
+    y : array-like of shape (n_samples,) or (n_samples, n_outputs)
         The target variable to try to predict in the case of
         supervised learning.
+    groups : array-like of shape (n_samples,), default=None
+        Group labels for the samples used while splitting the dataset into
+        train/test set. Only used in conjunction with a "Group" :term:`cv`
+        instance (e.g., :class:`GroupKFold`).
     cv : int, cross-validation generator or an iterable, default=None
         Determines the cross-validation splitting strategy.
         Possible inputs for cv are:
@@ -312,15 +331,60 @@ def hard_sample_detector(estimator, X, Y, cv=None, n_jobs=None,
         ``None`` means 1 unless in a :obj:`joblib.parallel_backend` context.
         ``-1`` means using all processors. See :term:`Glossary <n_jobs>`
         for more details.
+    verbose : int, default=0
+        The verbosity level.
     fit_params : dict, default=None
         Parameters to pass to the fit method of the estimator.
+    pre_dispatch : int or str, default='2*n_jobs'
+        Controls the number of jobs that get dispatched during parallel
+        execution. Reducing this number can be useful to avoid an
+        explosion of memory consumption when more jobs get dispatched
+        than CPUs can process. This parameter can be:
+            - None, in which case all the jobs are immediately
+              created and spawned. Use this for lightweight and
+              fast-running jobs, to avoid delays due to on-demand
+              spawning of the jobs
+            - An int, giving the exact number of total jobs that are
+              spawned
+            - A str, giving an expression as a function of n_jobs,
+              as in '2*n_jobs'
+    return_train_pred : bool, default=False
+        Whether to include train predictions.
+    return_estimator : bool, default=False
+        Whether to return the estimators fitted on each split.
+    error_fit : 'raise' or numeric, default=np.nan
+        Value to assign to the predictions if an error occurs in estimator fitting.
+        If set to 'raise', the error is raised.
+        If a numeric value is given, FitFailedWarning is raised.
 
     Returns
     -------
-    fr_df : pandas.DataFrame of shape (n_samples, n_cv_iterations)
-        The Failure (as 0) or Success (as 1) of each sample classification when
-        taken as test at each cv iteration.
-
+    ret : dict with the following possible keys (see ``parameters``):
+        fit_time : list of int
+            Time used to fit the estimators, in seconds, for the train set in
+            each of the CV folds.
+        pred_time : list of int
+            Time used to make predictions, in seconds, for the train set in
+            each of the CV folds.
+        estimator : list of estimator
+            The estimator objects for each cv split. Only available if
+            ``return_estimator`` is set to True.
+        test_pred : list of tuple
+            List of tuples, each with two arrays, the firs indicating the
+            sample index position and the second if it was correctly (True)
+            or not (False) classified. One element of the list for each fold
+            of the CV. Results of the test set of each CV fold.
+        train_pred : list of tuple
+            List of tuples, each with two arrays, the firs indicating the
+            sample index position and the second if it was correctly (True)
+            or not (False) classified. One element of the list for each fold
+            of the CV. Results of the training set of each of the CV fold.
+        test_success : array of shape (len(y), )
+            An array in wich each of the positions indicates the number
+            of successful predictions in the test set predictions.
+        train_success : array fo shape (len(y), )
+            An array un wich each of the positions indicates the number
+            of successful predictions in the training set predictions.
     Examples
     --------
 
@@ -329,66 +393,58 @@ def hard_sample_detector(estimator, X, Y, cv=None, n_jobs=None,
 
     cv = check_cv(cv, y, classifier=is_classifier(estimator))
 
-    if callable(scoring):
-        scorers = scoring
-    elif scoring is None or isinstance(scoring, str):
-        scorers = check_scoring(estimator, scoring)
-    else:
-        scorers = _check_multimetric_scoring(estimator, scoring)
-
     # We clone the estimator to make sure that all the folds are
     # independent, and that it is pickle-able.
     parallel = Parallel(n_jobs=n_jobs, verbose=verbose,
                         pre_dispatch=pre_dispatch)
     results = parallel(
-        delayed(_fit_and_score)(
-            clone(estimator), X, y, scorers, train, test, verbose, None,
-            fit_params, return_train_score=return_train_score,
+        delayed(_fit_and_report)(
+            clone(estimator), X, y, train, test, verbose, None,
+            fit_params, return_train_pred=return_train_pred,
             return_times=True, return_estimator=return_estimator,
-            error_score=error_score)
+            error_fit=error_fit)
         for train, test in cv.split(X, y, groups))
-
-    # For callabe scoring, the return type is only know after calling. If the
-    # return type is a dictionary, the error scores can now be inserted with
-    # the correct key.
-    if callable(scoring):
-        _insert_error_scores(results, error_score)
-
-    results = _aggregate_score_dicts(results)
-
     ret = {}
-    ret['fit_time'] = results["fit_time"]
-    ret['score_time'] = results["score_time"]
+    ret['fit_time'] = [r["fit_time"] for r in results]
+    ret['pred_time'] = [r["pred_time"] for r in results]
 
     if return_estimator:
-        ret['estimator'] = results["estimator"]
+        ret['estimator'] = [r["estimator"] for r in results]
 
-    test_scores_dict = _normalize_score_results(results["test_scores"])
-    if return_train_score:
-        train_scores_dict = _normalize_score_results(results["train_scores"])
+    ret['test_pred'] = [r["test_pred"] for r in results]
 
-    for name in test_scores_dict:
-        ret['test_%s' % name] = test_scores_dict[name]
-        if return_train_score:
-            key = 'train_%s' % name
-            ret[key] = train_scores_dict[name]
+    y_test_acc = np.zeros(len(y))
+    for idx, acc in ret['test_pred']:
+        y_test_acc[idx] += acc
+    ret['test_success'] = y_test_acc
+
+    if return_train_pred:
+        ret['train_pred'] = [r["train_pred"] for r in results]
+
+        y_train_acc = np.zeros(len(y))
+        for idx, acc in ret['train_pred']:
+            y_train_acc[idx] += acc
+        ret['train_success'] = y_train_acc
 
     return ret
 
-def _fit_and_report_bad(estimator, X, Y, train, test, verbose,
-                   parameters, fit_params, return_parameters=False, return_n_test_samples=False,
-                   return_times=False, return_estimator=False,
-                   split_progress=None, candidate_progress=None,
-                   error_score=np.nan):
+def _fit_and_report(estimator, X, y, train, test, verbose,
+                    parameters, fit_params, return_train_pred=False,
+                    return_parameters=False,
+                    return_n_test_samples=False, return_times=False,
+                    return_estimator=False, split_progress=None,
+                    candidate_progress=None, error_fit=np.nan):
     """Fit estimator and compute non-correctly predicted samples for a given
     dataset split.
+
+    Note: based on sklearn.model_selection._validation _fit_and_score function.
     Parameters
     ----------
     estimator : estimator object implementing 'fit'
         The object to use to fit the data.
     X : array-like of shape (n_samples, n_features)
         The data to fit.
-    Y : array-like of shape (n_samples,) or (n_samples, n_outputs) or None
+    y : array-like of shape (n_samples,) or (n_samples, n_outputs) or None
         The target variable to try to predict in the case of
         supervised learning.
     train : array-like of shape (n_train_samples,)
@@ -397,14 +453,16 @@ def _fit_and_report_bad(estimator, X, Y, train, test, verbose,
         Indices of test samples.
     verbose : int
         The verbosity level.
-    error_score : 'raise' or numeric, default=np.nan
-        Value to assign to the score if an error occurs in estimator fitting.
+    error_fit : 'raise' or numeric, default=np.nan
+        Value to assign to the result if an error occurs in estimator fitting.
         If set to 'raise', the error is raised.
         If a numeric value is given, FitFailedWarning is raised.
     parameters : dict or None
         Parameters to be set on the estimator.
     fit_params : dict or None
         Parameters that will be passed to ``estimator.fit``.
+    return_train_pred : bool, default=False
+        Compute and return predictions on training set.
     return_parameters : bool, default=False
         Return parameters that has been used for the estimator.
     split_progress : {list, tuple} of int, default=None
@@ -421,17 +479,22 @@ def _fit_and_report_bad(estimator, X, Y, train, test, verbose,
     Returns
     -------
     result : dict with the following attributes
-        train_scores : dict of scorer name -> float
-            Score on training set (for all the scorers),
-            returned only if `return_train_score` is `True`.
-        test_scores : dict of scorer name -> float
-            Score on testing set (for all the scorers).
+        train_pred : tuple of arrays
+            Tuple of arrays. First element is the indexes (ints) of the samples
+            evaluated, second element is an array of bools where True
+            means correctly classified and False incorrectly. Contains
+            the predictions results of the training set.
+        test_pred : tuple of arrays
+            Tuple of arrays. First element is the indexes (ints) of the samples
+            evaluated, second element is an array of bools where True
+            means correctly classified and False incorrectly. Contains
+            the predictions results of the test set.
         n_test_samples : int
             Number of test samples.
         fit_time : float
             Time spent for fitting in seconds.
-        score_time : float
-            Time spent for scoring in seconds.
+        pred_time : float
+            Time spent for predictions in seconds.
         parameters : dict or None
             The parameters that have been evaluated.
         estimator : estimator object
@@ -439,9 +502,9 @@ def _fit_and_report_bad(estimator, X, Y, train, test, verbose,
         fit_failed : bool
             The estimator failed to fit.
     """
-    if not isinstance(error_score, numbers.Number) and error_score != 'raise':
+    if not isinstance(error_fit, numbers.Number) and error_fit != 'raise':
         raise ValueError(
-            "error_score must be the string 'raise' or a numeric value. "
+            "error_fit must be the string 'raise' or a numeric value. "
             "(Hint: if using 'raise', please make sure that it has been "
             "spelled correctly.)"
         )
@@ -494,46 +557,38 @@ def _fit_and_report_bad(estimator, X, Y, train, test, verbose,
     except Exception as e:
         # Note fit time as time until error
         fit_time = time.time() - start_time
-        score_time = 0.0
-        if error_score == 'raise':
+        pred_time = 0.0
+        if error_fit == 'raise':
             raise
-        elif isinstance(error_score, numbers.Number):
-            if isinstance(scorer, dict):
-                test_scores = {name: error_score for name in scorer}
-                if return_train_score:
-                    train_scores = test_scores.copy()
-            else:
-                test_scores = error_score
-                if return_train_score:
-                    train_scores = error_score
-            warnings.warn("Estimator fit failed. The score on this train-test"
+        elif isinstance(error_fit, numbers.Number):
+            test_pred = error_fit
+            if return_train_pred:
+                train_pred = error_fit
+            warnings.warn("Estimator fit failed. The fot on this train-test"
                           " partition for these parameters will be set to %f. "
                           "Details: \n%s" %
-                          (error_score, format_exc()),
+                          (error_fit, format_exc()),
                           FitFailedWarning)
         result["fit_failed"] = True
     else:
         result["fit_failed"] = False
 
         fit_time = time.time() - start_time
-        test_scores = _score(estimator, X_test, y_test, scorer, error_score)
-        score_time = time.time() - start_time - fit_time
-        if return_train_score:
-            train_scores = _score(
-                estimator, X_train, y_train, scorer, error_score
-            )
+        test_pred = (test,
+                     _pred_result_per_sample(estimator, X_test, y_test)
+                    )
+
+        pred_time = time.time() - start_time - fit_time
+        if return_train_pred:
+            train_pred = (train,
+                          _pred_result_per_sample(
+                            estimator, X_train, y_train)
+                         )
 
     if verbose > 1:
-        total_time = score_time + fit_time
+        total_time = pred_time + fit_time
         end_msg = f"[CV{progress_msg}] END "
         result_msg = params_msg + (";" if params_msg else "")
-        if verbose > 2 and isinstance(test_scores, dict):
-            for scorer_name in sorted(test_scores):
-                result_msg += f" {scorer_name}: ("
-                if return_train_score:
-                    scorer_scores = train_scores[scorer_name]
-                    result_msg += f"train={scorer_scores:.3f}, "
-                result_msg += f"test={test_scores[scorer_name]:.3f})"
         result_msg += f" total time={logger.short_format_time(total_time)}"
 
         # Right align the result_msg
@@ -541,17 +596,43 @@ def _fit_and_report_bad(estimator, X, Y, train, test, verbose,
         end_msg += result_msg
         print(end_msg)
 
-    result["test_scores"] = test_scores
-    if return_train_score:
-        result["train_scores"] = train_scores
+    result["test_pred"] = test_pred
+    if return_train_pred:
+        result["train_pred"] = train_pred
     if return_n_test_samples:
         result["n_test_samples"] = _num_samples(X_test)
     if return_times:
         result["fit_time"] = fit_time
-        result["score_time"] = score_time
+        result["pred_time"] = pred_time
     if return_parameters:
         result["parameters"] = parameters
     if return_estimator:
         result["estimator"] = estimator
     return result
+
+def _pred_result_per_sample(estimator, X, y):
+    """Predicts with an already fitted estimator and returns the fails (False)
+    and successes (True) for each of the samples, compared with the real labels
+    (``y``).
+
+    Parameters
+    ----------
+    estimator : estimator object implementing 'predict'
+        The object to use to predict the data.
+    X : array-like of shape (n_samples, n_features)
+        The data to fit.
+    Y : array-like of shape (n_samples,) or (n_samples, n_outputs) or None
+        The target variable to try to predict in the case of
+        supervised learning.
+
+    Return
+    ------
+    s : array of bools of shape (len(y))
+        Bool array indicating the correctly predicted ``y`` labels (True) or
+        incorrect (False).
+    """
+    check_is_fitted(estimator)
+    y_pred = estimator.predict(X)
+    s = y_pred == y
+    return s
 

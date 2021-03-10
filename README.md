@@ -1,8 +1,11 @@
 # Python Machine Learning ToolKit
 
 __Author:__ David Piñeyro
+
 __Date:__ 2020-11-05
-__Version:__ 0.0.4
+
+__Version:__ 0.0.5
+
 __License:__ GPL-3
 
 This package is a collection of classes and functions designed to be helpful
