@@ -284,17 +284,17 @@ def hard_sample_detector(estimator, X, y, groups=None, cv=None, n_jobs=None,
     making very difficult the creation of a generalizable model. To fight
     against this and to have a better idea about the samples behaviour, this
     function will perform several rounds of CV testing each sample many times
-    and reporting the failure ratio of each. Samples with very high failure
-    ratio could be considered to be discarded.
+    and reporting the number of successes of each. Samples with very low
+    successes could be considered to be checked/discarded.
 
     Note: this function is only usable for supervised classification problems.
 
     Note 2: while this could be implemented as a transformer to be included
-    in Pipeline, I didn't it for two main reasons: a) adding a many-folded
+    in Pipeline, I do not do it for two main reasons: a) adding an additional
     CV procedure to a Pipeline could be very computational intensive; b) the
-    inclusion in a pipeline needs some mechanism of automatic removal of the
+    inclusion in a pipeline needs some mechanism for automatic removal of the
     hard samples, this could be a source of potential problems. I made this
-    function to provide means to investigate wierd samples, but automatically
+    function to provide means to investigate hard samples, but automatically
     removing them is a bit drastic.
 
     Note 3: based on sklearn.model_selection._validation cross_validate.
@@ -381,10 +381,14 @@ def hard_sample_detector(estimator, X, y, groups=None, cv=None, n_jobs=None,
             of the CV. Results of the training set of each of the CV fold.
         test_success : array of shape (len(y), )
             An array in wich each of the positions indicates the number
-            of successful predictions in the test set predictions.
+            of successful predictions in the test set predictions. With this
+            array one can study the hard samples looking at samples with
+            low successes.
         train_success : array fo shape (len(y), )
             An array un wich each of the positions indicates the number
-            of successful predictions in the training set predictions.
+            of successful predictions in the training set predictions. This
+            is generally less informative, but can serve to investigate the
+            capacity of the estimator to overfit to hard samples.
     Examples
     --------
 
