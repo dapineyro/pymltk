@@ -635,7 +635,7 @@ def _pred_result_per_sample(estimator, X, y):
         Bool array indicating the correctly predicted ``y`` labels (True) or
         incorrect (False).
     """
-    check_is_fitted(estimator)
+    #check_is_fitted(estimator) # It fails with some Pipelines
     y_pred = estimator.predict(X)
     s = y_pred == y
     return s
