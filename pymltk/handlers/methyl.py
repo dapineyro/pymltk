@@ -54,7 +54,7 @@ class MethylData:
         method. Samples as rows and features as columns. Its the same as
         the original, but with each sample with np.nan in class_label
         eliminated.
-    Y_ : pandas.Series
+    y_ : pandas.Series
         The target variable (classification variable) from the
         sample_sheet[class_label].
     class_label_ : string
@@ -120,7 +120,7 @@ class MethylData:
         m_values_ :pandas.DataFrame
         sample_sheet_original_ : pandas.DataFrame
         sample_sheet_ : pandas.DataFrame
-        Y_ : pandas.Series
+        y_ : pandas.Series
         """
         print('[MSG] Loading data...')
         try:
@@ -176,7 +176,7 @@ class MethylData:
 
         self.betas_ = betas_processed
         self.sample_sheet_ = sample_sheet_processed
-        self.Y_ = sample_sheet_processed[class_label]
+        self.y_ = sample_sheet_processed[class_label]
         return self
 
     def group_cpgs_by_island(self, manifest_path, skiprows = 7,
