@@ -46,7 +46,7 @@ def betas2m(betas):
     return m_values
 
 
-def train_test_split_david(X, Y, stratify, test_size = 0.3, n_splits = 1,
+def train_test_split_david(X, y, stratify, test_size = 0.3, n_splits = 1,
                            imputation = 'random', random_state = 1234,
                            max_diff_other = 0.25, max_iter = 1000,
                            verbose = 1):
@@ -65,7 +65,7 @@ def train_test_split_david(X, Y, stratify, test_size = 0.3, n_splits = 1,
     Arguments:
         X [pandas.DataFrame]: the array to be splitted into training and test
             splits. Use sample names as index.
-        Y [pandas.Series]: the target labels corresponding to samples in X.
+        y [pandas.Series]: the target labels corresponding to samples in X.
             It should be in the same order as X. It will be splitted in the
             same way as X. Use sample names as index.
         stratify [pandas.DataFrame / pandas.Series]:
@@ -97,10 +97,10 @@ def train_test_split_david(X, Y, stratify, test_size = 0.3, n_splits = 1,
             split list contains (by order):
                 X_train [pandas.DataFrame]: the training set.
                 X_test [pandas.DataFrame]: the test set.
-                Y_train [pandas.Series]: class labels for training set samples.
-                Y_test [pandas.Series]: class labels for test set.
+                y_train [pandas.Series]: class labels for training set samples.
+                y_test [pandas.Series]: class labels for test set.
                 valid_for_stratification_idx [list]: the stratify.columns index
-                    possitions of the columns that were actually used for 
+                    possitions of the columns that were actually used for
                     stratification.
 
     Example:
@@ -130,9 +130,9 @@ def train_test_split_david(X, Y, stratify, test_size = 0.3, n_splits = 1,
             np.random.seed(random_state + iteration)
             rand_i = np.random.randint(1, 9999)
             # First split.
-            X_train, X_test, Y_train, Y_test = \
+            X_train, X_test, y_train, y_test = \
                 model_sel.train_test_split(X,
-                                           Y,
+                                           y,
                                            test_size = test_size,
                                            random_state = rand_i,
                                            stratify = stratify.iloc[:,0])
@@ -206,9 +206,9 @@ def train_test_split_david(X, Y, stratify, test_size = 0.3, n_splits = 1,
                         # first column and get the first that satisfy 
                         # thresholds, if any.
                         rand_i_c = rand_i + n + i
-                        X_train_c, X_test_c, Y_train_c, Y_test_c = \
+                        X_train_c, X_test_c, y_train_c, y_test_c = \
                             model_sel.train_test_split(X,
-                                                       Y,
+                                                       y,
                                                        test_size = test_size,
                                                        random_state = rand_i_c,
                                                        stratify = stratify.iloc[:,0])
@@ -243,8 +243,8 @@ def train_test_split_david(X, Y, stratify, test_size = 0.3, n_splits = 1,
                         if all(valid_list):
                             X_train = X_train_c
                             X_test = X_test_c
-                            Y_train = Y_train_c
-                            Y_test = Y_test_c
+                            y_train = y_train_c
+                            y_test = y_test_c
                             train_samples = train_samples_c
                             test_samples = test_samples_c
                             train_len = train_len_c
@@ -265,7 +265,7 @@ def train_test_split_david(X, Y, stratify, test_size = 0.3, n_splits = 1,
                         print(f'[MSG] Iterative search not necessary for {columns_strat[i]}.')
                     valid_for_stratification_idx.append(i)
             # Return the split.
-            new_split = [X_train, X_test, Y_train, Y_test,
+            new_split = [X_train, X_test, y_train, y_test,
                          valid_for_stratification_idx]
             splits_found.append(new_split)
         return splits_found
@@ -625,7 +625,7 @@ def _pred_result_per_sample(estimator, X, y):
         The object to use to predict the data.
     X : array-like of shape (n_samples, n_features)
         The data to fit.
-    Y : array-like of shape (n_samples,) or (n_samples, n_outputs) or None
+    y : array-like of shape (n_samples,) or (n_samples, n_outputs) or None
         The target variable to try to predict in the case of
         supervised learning.
 
