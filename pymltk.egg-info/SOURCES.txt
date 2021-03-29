@@ -1,7 +1,6 @@
 README.md
 setup.py
 pymltk/__init__.py
-pymltk/pymltk.py
 pymltk.egg-info/PKG-INFO
 pymltk.egg-info/SOURCES.txt
 pymltk.egg-info/dependency_links.txt

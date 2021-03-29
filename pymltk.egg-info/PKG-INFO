@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: pymltk
-Version: 0.0.4
+Version: 0.0.5
 Summary: Python Machine Learning Toolkit
 Home-page: https://github.com/dapineyro/pymltk
 Author: David Piñeyro
@@ -9,8 +9,11 @@ License: GPL-3
 Description: # Python Machine Learning ToolKit
         
         __Author:__ David Piñeyro
+        
         __Date:__ 2020-11-05
-        __Version:__ 0.0.4
+        
+        __Version:__ 0.0.5
+        
         __License:__ GPL-3
         
         This package is a collection of classes and functions designed to be helpful
